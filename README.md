@@ -1,0 +1,2 @@
+# ffmpeg_glTransition_web_lib
+web端ffmpeg库编译，ffmpeg+gl_transition实现视频转场
