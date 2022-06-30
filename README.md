@@ -1,2 +1,2 @@
 # ffmpeg_glTransition_web_lib
-web端ffmpeg库编译，ffmpeg+gl_transition实现视频转场
+web端ffmpeg库编译，ffmpeg加gl-transition实现视频转场
