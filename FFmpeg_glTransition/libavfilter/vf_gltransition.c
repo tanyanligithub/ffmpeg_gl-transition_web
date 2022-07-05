@@ -8,7 +8,7 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "framesync.h"
-
+#include <emscripten/threading.h>
 
 #ifndef __APPLE__
 // # define GL_TRANSITION_USING_EGL //remove this line if you don't want to use EGL
@@ -386,9 +386,6 @@ static int setup_gl(AVFilterLink *inLink)
   c->eglCtx = eglCreateContext(c->eglDpy, c->eglCfg, EGL_NO_CONTEXT, NULL);
   eglMakeCurrent(c->eglDpy, c->eglSurf, c->eglSurf, c->eglCtx);
 #else
-  //glfw
-
-  // libo glfwWindowHint(GLFW_VISIBLE, 0);
   if (c->window == NULL) {
       c->window = glfwCreateWindow(inLink->w, inLink->h, "", NULL, NULL);
       av_log(ctx, AV_LOG_ERROR, "glfwCreateWindow called");
@@ -399,15 +396,15 @@ static int setup_gl(AVFilterLink *inLink)
       av_log(ctx, AV_LOG_ERROR, "setup_gl ERROR");
       return -1;
   }
-   glfwMakeContextCurrent(c->window);
-
+//   glfwMakeContextCurrent(c->window);
+emscripten_webgl_make_context_current(c->window);
 #endif
 
-#ifndef __APPLE__
-  glewExperimental = GL_TRUE;
-  glewInit();
-  av_log(ctx, AV_LOG_INFO, "glewInit called");
-#endif
+//#ifndef __APPLE__
+//  glewExperimental = GL_TRUE;
+//  glewInit();
+//  av_log(ctx, AV_LOG_INFO, "glewInit called");
+//#endif
 
   glViewport(0, 0, inLink->w, inLink->h);
 
@@ -424,7 +421,7 @@ static int setup_gl(AVFilterLink *inLink)
   setup_tex(inLink);
   setup_fbo(inLink);
 
-
+  emscripten_webgl_make_context_current(0);
   return 0;
 }
 
@@ -450,7 +447,8 @@ static AVFrame *apply_transition(FFFrameSync *fs,
 #ifdef GL_TRANSITION_USING_EGL
     eglMakeCurrent(c->eglDpy, c->eglSurf, c->eglSurf, c->eglCtx);
 #else
-    glfwMakeContextCurrent(c->window);
+//    glfwMakeContextCurrent(c->window);
+emscripten_webgl_make_context_current(c->window);
 #endif
 
     glBindFramebuffer(GL_FRAMEBUFFER, c->_fbo);
@@ -463,31 +461,33 @@ static AVFrame *apply_transition(FFFrameSync *fs,
     glUniform1f(c->progress, progress);
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT glGet error:%d", glGetError());
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, c->from);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, fromFrame->linesize[0] / 3);
+//    glPixelStorei(GL_UNPACK_ROW_LENGTH, fromFrame->linesize[0] / 3);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, fromFrame->data[0]);
 
 
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, c->to);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, toFrame->linesize[0] / 3);
+//    glPixelStorei(GL_UNPACK_ROW_LENGTH, toFrame->linesize[0] / 3);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, toLink->w, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, toFrame->data[0]);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    glPixelStorei(GL_PACK_ROW_LENGTH, outFrame->linesize[0] / 3);
+//    glPixelStorei(GL_PACK_ROW_LENGTH, outFrame->linesize[0] / 3);
     glReadPixels(0, 0, outLink->w, outLink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)outFrame->data[0]);
     int errorRet = glGetError();
     // av_log(ctx, AV_LOG_DEBUG, "glReadPixel error: %d, w:%d, h:%d", errorRet, outLink->w, outLink->h);
 
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+//    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT  4 glGet error:%d", glGetError());
+
+//    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     av_frame_free(&fromFrame);
-
+    emscripten_webgl_make_context_current(0);
     return outFrame;
 }
 
@@ -529,10 +529,10 @@ static AVFrame *apply_transition(FFFrameSync *fs,
 
     // av_log_set_level(AV_LOG_ERROR);
 #ifndef GL_TRANSITION_USING_EGL
- if (!glfwInit())
- {
-   return -1;
- }
+// if (!glfwInit())
+// {
+//   return -1;
+// }
 #endif
 
 return 0;
@@ -552,6 +552,7 @@ static av_cold void uninit(AVFilterContext *ctx) {
     }
 #else
 if (c->window) {
+        emscripten_webgl_make_context_current(c->window);
         glDeleteTextures(1, &c->_color);
         glDeleteFramebuffers(1, &c->_fbo);
         glDeleteTextures(1, &c->from);
@@ -559,6 +560,8 @@ if (c->window) {
         glDeleteBuffers(1, &c->posBuf);
         glDeleteProgram(c->program);
         //  glfwDestroyWindow(c->window);
+        emscripten_webgl_make_context_current(0);
+
     }
 
 #endif
