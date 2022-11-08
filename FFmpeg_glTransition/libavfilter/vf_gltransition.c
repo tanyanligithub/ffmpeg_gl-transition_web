@@ -27,6 +27,7 @@
 # include <EGL/eglext.h>
 #else
 # include <GLFW/glfw3.h>
+#include <GLES3/gl3.h>
 #endif
 
 #include <stdio.h>
@@ -51,7 +52,6 @@ static const EGLint configAttribs[] = {
 static const float position[12] = {
         -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f
 };
-
 
 
 static const GLchar *v_shader_source =
@@ -205,12 +205,6 @@ static int build_program(AVFilterContext *ctx)
         source[fsize] = 0;
     }
 
-    //  source = "vec4 transition(vec2 p) {\n"
-    //           "  float x = progress;\n"
-    //           "  x=smoothstep(.0,1.0,(x*2.0+p.x-1.0));\n"
-    //           "  return mix(getFromColor((p-.5)*(1.-x)+.5), getToColor((p-.5)*x+.5), x);\n"
-    //           "}";
-
     const char *transition_source = source ? source : f_default_transition_source;
 
     int len = strlen(f_shader_template) + strlen(transition_source);
@@ -247,11 +241,13 @@ static int build_program(AVFilterContext *ctx)
 static void setup_fbo(AVFilterLink *fromLink)
 {
     AVFilterContext     *ctx = fromLink->dst;
-    av_log(ctx, AV_LOG_INFO, "setup_fbo enter");
+    av_log(ctx, AV_LOG_ERROR, "setup_fbo enter 256 fromLink w:%d, h:%d",fromLink->w, fromLink->h);
     GLTransitionContext *c = ctx->priv;
     glGenTextures(1, &c->_color);
     glBindTexture(GL_TEXTURE_2D, c->_color);
-    glTexImage2D(GL_TEXTURE_2D, 0, PIXEL_FORMAT, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, PIXEL_FORMAT, fromLink->w , fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, 0);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -268,8 +264,9 @@ static void setup_fbo(AVFilterLink *fromLink)
 
     glDrawBuffers(1, buffers);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
     int error = glGetError();
-    //  av_log(ctx, AV_LOG_INFO,"setup_fbo exit error:%d, fbo:%d, color:%d", error, c->_fbo, c->_color);
+    av_log(ctx, AV_LOG_ERROR,"setup_fbo exit error:%d, fbo:%d, color:%d", error, c->_fbo, c->_color);
 }
 
 static void setup_vbo(GLTransitionContext *c)
@@ -390,13 +387,14 @@ static int setup_gl(AVFilterLink *inLink)
       c->window = glfwCreateWindow(inLink->w, inLink->h, "", NULL, NULL);
       av_log(ctx, AV_LOG_ERROR, "glfwCreateWindow called");
   } else {
-      av_log(ctx, AV_LOG_ERROR, "glfwCreateWindow not call c->window:%p", c->window);
+      av_log(ctx, AV_LOG_ERROR, "glfwCreateWindow not call c->window:%p \n", c->window);
   }
   if (!c->window) {
       av_log(ctx, AV_LOG_ERROR, "setup_gl ERROR");
       return -1;
   }
 //   glfwMakeContextCurrent(c->window);
+
 emscripten_webgl_make_context_current(c->window);
 #endif
 
@@ -405,7 +403,6 @@ emscripten_webgl_make_context_current(c->window);
 //  glewInit();
 //  av_log(ctx, AV_LOG_INFO, "glewInit called");
 //#endif
-
   glViewport(0, 0, inLink->w, inLink->h);
 
   int ret;
@@ -457,33 +454,127 @@ emscripten_webgl_make_context_current(c->window);
     const float ts = ((fs->pts - c->first_pts) / (float)fs->time_base.den) - c->offset;
     const float progress = FFMAX(0.0f, FFMIN(1.0f, ts / c->duration));
     frameNum++;
-    av_log(ctx, AV_LOG_DEBUG, "frameNum:%d, from pts:%llu, to pts:%llu, transition '%s' %llu %f %f\n",frameNum,fromFrame->pts, toFrame->pts, c->source, fs->pts - c->first_pts, ts, progress);
+    av_log(ctx, AV_LOG_ERROR, "frameNum:%d, from pts:%llu, to pts:%llu, transition '%s' %llu %f %f\n",frameNum,fromFrame->pts, toFrame->pts, c->source, fs->pts - c->first_pts, ts, progress);
     glUniform1f(c->progress, progress);
-
+    int unpackBits = 0;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackBits);
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 111 packBits :%d \n", unpackBits);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT glGet error:%d", glGetError());
+
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, c->from);
-//    glPixelStorei(GL_UNPACK_ROW_LENGTH, fromFrame->linesize[0] / 3);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, fromFrame->data[0]);
+//    glPixelStorei(GL_UNPACK_ROW_LENGTH, 480);
 
+#ifdef defined(GL_UNPACK_ROW_LENGTH) && !defined(__EMSCRIPTEN__)
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 666 \n");
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, fromFrame->linesize[0] / 3);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, fromFrame->data[0]);
+#else
+    if(fromFrame->linesize[0] / 3 == fromLink->w){
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, fromFrame->data[0]);
+    }else{
+//        int linesize = fromFrame->linesize[0] / 3;
+//        av_log(ctx, AV_LOG_ERROR, "from glTexImage2D  480===%d,%d\n",linesize,fromLink->w);
+//        unsigned  char* ptrdst = malloc(fromLink->w*fromLink->h*3);
+//        for(int i =0 ; i <fromLink->h ; i++){
+//            memcpy(ptrdst+fromLink->w*3*i,(fromFrame->data[0])+linesize*i*3,fromLink->w*3);
+//        }
+//        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, ptrdst);
+//        free(ptrdst);
+
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+            av_log(ctx, AV_LOG_ERROR, "glTexImage2D  480 fromLink-w:%d, h:%d, linesize[0]:%d \n",  fromLink->w, fromLink->h,fromFrame->linesize[0]);
+            for( int y = 0; y < fromLink->h; y++)
+            {
+                char *row = fromFrame->data[0] + ((y + 0)*fromFrame->linesize[0]  + 0);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, fromLink->w, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
+            }
+    }
+
+
+#endif
+
+   // glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, (fromFrame->linesize[0]) / 3, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, fromFrame->data[0]);
+
+    av_log(ctx, AV_LOG_ERROR, "glTexImage2D  480 fromLink-w:%d, h:%d, linesize[0]:%d \n",  fromLink->w, fromLink->h,fromFrame->linesize[0]);
 
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, c->to);
-//    glPixelStorei(GL_UNPACK_ROW_LENGTH, toFrame->linesize[0] / 3);
+
+#ifdef defined(GL_UNPACK_ROW_LENGTH) && !defined(__EMSCRIPTEN__)
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, toFrame->linesize[0] / 3);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, toLink->w, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, toFrame->data[0]);
+#else
+    if(toFrame->linesize[0] / 3 == toLink->w){
+        av_log(ctx, AV_LOG_ERROR, "glTexImage2D  480===\n");
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, toLink->w, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, toFrame->data[0]);
+    }else{
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, toLink->w, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+        av_log(ctx, AV_LOG_ERROR, "glTexImage2D 222  toLink-w:%d, h:%d, linesize[0]:%d \n",  toLink->w, toLink->h,toFrame->linesize[0]);
+        for( int y = 0; y < toLink->h; y++)
+        {
+            char *row = toFrame->data[0] + ((y + 0)*toFrame->linesize[0]  + 0);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, toLink->w, 1, GL_RGB, GL_UNSIGNED_BYTE, row);
+        }
+//        av_log(ctx, AV_LOG_ERROR, "unglTexImage2D  480===\n");
+//        int linesize =  toFrame->linesize[0]/ 3;
+//        int toLinkw = toLink->w;
+//        unsigned char* ptrdst = malloc(toLinkw*toLink->h*3);
+//
+//        av_log(ctx, AV_LOG_ERROR, "to glTexImage2D  480===%d,%d\n",linesize,toLink->w);
+//
+//        for(int i =0 ; i <toLink->h ; i++){
+//            memcpy(ptrdst+toLinkw*3*i,(toFrame->data[0])+linesize*i*3,toLinkw*3);
+//        }
+//        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, toLinkw, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, ptrdst);
+//        free(ptrdst);
+    }
+
+#endif
+ //   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, (toFrame->linesize[0]) / 3, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, toFrame->data[0]);
+
+    av_log(ctx, AV_LOG_ERROR, "glTexImage2D 222  toLink-w:%d, h:%d, linesize[0]:%d \n",  toLink->w, toLink->h,toFrame->linesize[0]);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
-//    glPixelStorei(GL_PACK_ROW_LENGTH, outFrame->linesize[0] / 3);
-    glReadPixels(0, 0, outLink->w, outLink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)outFrame->data[0]);
     int errorRet = glGetError();
-    // av_log(ctx, AV_LOG_DEBUG, "glReadPixel error: %d, w:%d, h:%d", errorRet, outLink->w, outLink->h);
+    av_log(ctx, AV_LOG_ERROR, "glReadPixel error: %d, outLink-w:%d, h:%d, toLink w:%d, h:%d,linesize[0]:%d \n", errorRet, outLink->w, outLink->h, toLink->w, toLink->h,outFrame->linesize[0]);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackBits);
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 222 packBits :%d \n", unpackBits);
 
-//    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    int packBits = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &packBits);
+    av_log(ctx, AV_LOG_ERROR, "GL_PACK_ALIGNMENT packBits11111 :%d \n", packBits);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+#ifdef  defined(GL_PACK_ROW_LENGTH) && !defined(__EMSCRIPTEN__)
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 666888 \n");
+    glPixelStorei(GL_PACK_ROW_LENGTH, outFrame->linesize[0] / 3);
+#else
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 666877 \n");
+#endif
+
+    glReadPixels(0, 0, (outFrame->linesize[0] / 3), outLink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)outFrame->data[0]);
+
+#ifdef defined(GL_PACK_ROW_LENGTH) && !defined(__EMSCRIPTEN__)
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 666888 \n");
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+#else
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 666877 \n");
+#endif
+
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT  4 glGet error:%d", glGetError());
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 222 glGet error:%d", glGetError());
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackBits);
 
-//    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 111 packBits :%d", packBits);
+
+#ifdef defined(GL_UNPACK_ROW_LENGTH) && !defined(__EMSCRIPTEN__)
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+#endif
+
+    av_log(ctx, AV_LOG_ERROR, "GL_UNPACK_ALIGNMENT 444 glGet error:%d", glGetError());
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     av_frame_free(&fromFrame);
